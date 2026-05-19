@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Faraday's Law Virtual Lab</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<style>
+:root {
+  --font-sans: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  --font-mono: 'Consolas', 'SF Mono', 'Courier New', monospace;
+  --color-bg-page: #eceae4;
+  --color-bg-card: #ffffff;
+  --color-bg-surface: #f5f4f0;
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #5a5a5a;
+  --color-text-tertiary: #8a8a8a;
+  --color-border-light: rgba(0,0,0,0.10);
+  --color-border-mid: rgba(0,0,0,0.20);
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg-page);
+  min-height: 100vh;
+  padding: 1.5rem 1rem;
+}
+#app {
+  max-width: 740px;
+  margin: 0 auto;
+  background: var(--color-bg-card);
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+}
+.lab-header { margin-bottom: 1rem; border-bottom: 0.5px solid var(--color-border-light); padding-bottom: 0.75rem; }
+.lab-header h1 { font-size: 18px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 3px; }
+.lab-header p { font-size: 12px; color: var(--color-text-tertiary); }
+button { font-family: var(--font-sans); }
+button:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
+@media (max-width: 520px) {
+  body { padding: 0.5rem; }
+  #app { padding: 1rem; border-radius: 12px; }
+  .bottom-grid { grid-template-columns: 1fr !important; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="lab-header">
+    <h1>Faraday's Law Virtual Lab</h1>
+    <p>E4 Magnetism &nbsp;&middot;&nbsp; Electromagnetic Induction &nbsp;&middot;&nbsp; Modeling Instruction</p>
+  </div>
+  <div id="root"></div>
+</div>
+
+<script>
+const {useState, useRef, useCallback, useEffect} = React;
+
+/* ── Physics ──────────────────────────────────────────── */
+const GW=285, GH=58, HIST=100, HALF_L=55, R_P=60;
+const SOL_CX=340, SOL_CY=110, SOL_HW=105, SOL_HH=42;
+const MAG_HW=55, MAG_HH=17;
+
+function calcFlux(x, pole) {
+  const L=HALF_L, R=R_P;
+  const xN = pole==='N' ? x-L : x+L;
+  const xS = pole==='N' ? x+L : x-L;
+  return (xS/Math.hypot(xS,R) - xN/Math.hypot(xN,R)) / 2;
+}
+
+function makePath(arr, maxV, w, h) {
+  if (arr.length < 2) return '';
+  return arr.map((v, i) => {
+    const x = (i / (HIST-1)) * w;
+    const y = h/2 - Math.max(-1, Math.min(1, v/maxV)) * (h/2 - 4);
+    return `${i===0?'M':'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+/* ── Component ────────────────────────────────────────── */
+function FaradayLab() {
+  const [relX, setRelX]         = useState(-230);
+  const [pole, setPole]         = useState('N');
+  const [hist, setHist]         = useState({flux:[], emf:[]});
+  const [predMode, setPredMode] = useState(false);
+  const [prediction, setPred]   = useState(null);
+  const [revealed, setRevealed] = useState(false);
+
+  const dragging = useRef(false);
+  const last     = useRef({x:-230, flux:calcFlux(-230,'N'), t:Date.now()});
+  const svgRef   = useRef(null);
+
+  const getSVGX = useCallback((clientX) => {
+    if (!svgRef.current) return 0;
+    const r = svgRef.current.getBoundingClientRect();
+    return ((clientX - r.left) / r.width) * 680 - SOL_CX;
+  }, []);
+
+  const move = useCallback((clientX) => {
+    const newX = Math.max(-275, Math.min(275, getSVGX(clientX)));
+    const now  = Date.now();
+    const dt   = Math.max(8, now - last.current.t);
+    const newFlux   = calcFlux(newX, pole);
+    const rawEmf    = -(newFlux - last.current.flux) / (dt * 0.005 + 0.001);
+    const clampedEmf = Math.max(-3, Math.min(3, rawEmf));
+    setRelX(newX);
+    setHist(h => ({
+      flux: [...h.flux.slice(-(HIST-1)), newFlux],
+      emf:  [...h.emf.slice(-(HIST-1)), clampedEmf],
+    }));
+    last.current = {x: newX, flux: newFlux, t: now};
+  }, [pole, getSVGX]);
+
+  const doReset = useCallback((p) => {
+    const x0 = -230, np = p !== undefined ? p : pole;
+    setRelX(x0);
+    setHist({flux:[], emf:[]});
+    setPred(null);
+    setRevealed(false);
+    last.current = {x: x0, flux: calcFlux(x0, np), t: Date.now()};
+  }, [pole]);
+
+  useEffect(() => {
+    const up = () => { dragging.current = false; };
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, []);
+
+  /* ── Derived state ── */
+  const flux       = calcFlux(relX, pole);
+  const emf        = hist.emf.length ? hist.emf[hist.emf.length-1] : 0;
+  const galvAngle  = Math.max(-72, Math.min(72, emf * 25));
+  const dF         = hist.flux.length > 1
+    ? hist.flux[hist.flux.length-1] - hist.flux[hist.flux.length-2]
+    : 0;
+  const isActive   = Math.abs(emf) > 0.05;
+  const Bdir       = dF > 0.001 ? 'left' : dF < -0.001 ? 'right' : null;
+
+  const mx         = SOL_CX + relX;
+  const leftColor  = pole === 'N' ? '#dc2626' : '#1d4ed8';
+  const rightColor = pole === 'N' ? '#1d4ed8' : '#dc2626';
+  const nCoils     = 14;
+  const coilXs     = Array.from({length: nCoils+1}, (_,i) =>
+    SOL_CX - SOL_HW + i * (SOL_HW*2) / nCoils);
+
+  const actualDir  = galvAngle < -5 ? 'left' : galvAngle > 5 ? 'right' : 'zero';
+  const isCorrect  = prediction === actualDir;
+
+  const statusText = isActive
+    ? (dF > 0
+        ? 'Flux \u2191 (rightward) \u2192 induced B opposes \u2192 leftward (Lenz\u2019s law)'
+        : 'Flux \u2193 \u2192 induced B opposes \u2192 rightward (Lenz\u2019s law)')
+    : Math.abs(flux) > 0.01
+        ? '\u0394\u03A6/\u0394t = 0 \u2192 \u03B5 = 0  (stationary magnet)'
+        : 'Drag the magnet through the solenoid';
+
+  const fluxPath = makePath(hist.flux, 0.7, GW, GH);
+  const emfPath  = makePath(hist.emf,  2.0, GW, GH);
+
+  const E = React.createElement;
+  const btnBase = {
+    padding:'3px 10px', fontSize:13, cursor:'pointer', borderRadius:'8px',
+    fontFamily:'var(--font-sans)', fontWeight:400,
+  };
+
+  /* ── Render ── */
+  return E('div', {style:{fontFamily:'var(--font-sans)', paddingTop:'0.5rem'}},
+
+    /* Controls */
+    E('div', {style:{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}},
+      E('span', {style:{fontSize:13, color:'var(--color-text-secondary)'}}, 'Pole entering first:'),
+      ...['N','S'].map(p =>
+        E('button', {key:p,
+          style:{...btnBase,
+            border: pole===p ? `1.5px solid ${p==='N'?'#dc2626':'#1d4ed8'}` : '0.5px solid var(--color-border-mid)',
+            background: pole===p ? (p==='N' ? '#fef2f2' : '#eff6ff') : 'var(--color-bg-card)',
+            color: pole===p ? (p==='N' ? '#dc2626' : '#1d4ed8') : 'var(--color-text-secondary)',
+            fontWeight: pole===p ? 500 : 400,
+          },
+          onClick: () => { setPole(p); doReset(p); }
+        }, p + ' pole')
+      ),
+      E('button', {
+        style:{...btnBase,
+          border: predMode ? '1.5px solid #7c3aed' : '0.5px solid var(--color-border-mid)',
+          background: predMode ? '#f5f3ff' : 'var(--color-bg-card)',
+          color: predMode ? '#7c3aed' : 'var(--color-text-secondary)',
+          fontWeight: predMode ? 500 : 400,
+        },
+        onClick: () => { setPredMode(m => !m); doReset(pole); }
+      }, predMode ? 'Predict mode: ON' : 'Predict mode'),
+      E('button', {
+        style:{...btnBase, marginLeft:'auto', border:'0.5px solid var(--color-border-mid)',
+          background:'var(--color-bg-card)', color:'var(--color-text-secondary)'},
+        onClick: () => doReset(pole)
+      }, 'Reset')
+    ),
+
+    /* Main SVG */
+    E('svg', {
+      ref: svgRef,
+      viewBox: '0 0 680 220',
+      style:{width:'100%', height:'auto', display:'block', cursor:'grab',
+        touchAction:'none', borderRadius:'8px',
+        border:'0.5px solid var(--color-border-light)',
+        background:'var(--color-bg-surface)'},
+      onMouseDown: () => { dragging.current = true; },
+      onMouseMove: e => { if (dragging.current) move(e.clientX); },
+      onMouseUp:   () => { dragging.current = false; },
+      onMouseLeave:() => { dragging.current = false; },
+      onTouchStart: e => { e.preventDefault(); dragging.current = true; },
+      onTouchMove:  e => { e.preventDefault(); if (e.touches[0]) move(e.touches[0].clientX); },
+      onTouchEnd:   () => { dragging.current = false; },
+    },
+      E('defs', null,
+        E('clipPath', {id:'fl-top'}, E('rect',{x:0,y:0,width:680,height:SOL_CY})),
+        E('clipPath', {id:'fl-bot'}, E('rect',{x:0,y:SOL_CY,width:680,height:220})),
+        E('marker', {id:'fl-arr', markerWidth:7, markerHeight:7, refX:6, refY:3.5, orient:'auto'},
+          E('path', {d:'M0,0 L7,3.5 L0,7Z', fill:'#7c3aed'}))
+      ),
+
+      /* Rail */
+      E('line', {x1:25,y1:SOL_CY,x2:655,y2:SOL_CY, stroke:'var(--color-border-light)', strokeWidth:'0.5', strokeDasharray:'4 4'}),
+      E('text', {x:340,y:210, textAnchor:'middle', fontSize:10,
+        style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-sans)'}}, 'drag magnet \u2192'),
+
+      /* Back coils (top half) */
+      ...coilXs.map((cx,i) => E('ellipse',{key:'b'+i, cx, cy:SOL_CY, rx:8, ry:SOL_HH,
+        fill:'none', stroke:'var(--color-border-mid)', strokeWidth:1, clipPath:'url(#fl-top)'})),
+
+      /* Interior fill */
+      E('rect', {x:SOL_CX-SOL_HW+8, y:SOL_CY-SOL_HH+5,
+        width:(SOL_HW-8)*2, height:(SOL_HH-5)*2, fill:'var(--color-bg-card)'}),
+
+      /* B-induced arrows */
+      ...(Bdir ? [SOL_CX-62, SOL_CX, SOL_CX+62].map((ax,i) => {
+        const x1 = Bdir==='right' ? ax-18 : ax+18;
+        const x2 = Bdir==='right' ? ax+18 : ax-18;
+        return E('line',{key:'bi'+i, x1, y1:SOL_CY, x2, y2:SOL_CY,
+          stroke:'#7c3aed', strokeWidth:1.5, markerEnd:'url(#fl-arr)'});
+      }) : []),
+
+      Bdir && E('text', {x:SOL_CX+SOL_HW+10, y:SOL_CY+4, fontSize:10,
+        style:{fill:'#7c3aed', fontFamily:'var(--font-sans)'}},
+        Bdir==='right' ? 'B\u2192' : '\u2190B'),
+
+      /* Galvanometer wire loop */
+      E('path', {
+        d:`M${SOL_CX-SOL_HW},${SOL_CY-SOL_HH} C${SOL_CX-SOL_HW},${SOL_CY-SOL_HH-28} ${SOL_CX+SOL_HW},${SOL_CY-SOL_HH-28} ${SOL_CX+SOL_HW},${SOL_CY-SOL_HH}`,
+        fill:'none', stroke: isActive ? '#7c3aed' : 'var(--color-border-light)',
+        strokeWidth: isActive ? 1 : 0.8, strokeDasharray:'3 2'}),
+      E('rect', {x:SOL_CX-16, y:SOL_CY-SOL_HH-52, width:32, height:22, rx:3,
+        fill:'var(--color-bg-card)',
+        stroke: isActive ? '#7c3aed' : 'var(--color-border-mid)',
+        strokeWidth: isActive ? 1.5 : 0.5}),
+      E('text', {x:SOL_CX, y:SOL_CY-SOL_HH-34, textAnchor:'middle', fontSize:11,
+        style:{fill: isActive ? '#7c3aed' : 'var(--color-text-secondary)',
+          fontFamily:'var(--font-sans)', fontWeight:500}}, 'G'),
+
+      /* Magnet */
+      E('g', null,
+        E('rect', {x:mx-MAG_HW, y:SOL_CY-MAG_HH, width:MAG_HW,  height:MAG_HH*2, fill:leftColor,  rx:3, ry:3}),
+        E('rect', {x:mx,        y:SOL_CY-MAG_HH, width:MAG_HW,  height:MAG_HH*2, fill:rightColor, rx:3, ry:3}),
+        E('line', {x1:mx, y1:SOL_CY-MAG_HH, x2:mx, y2:SOL_CY+MAG_HH, stroke:'rgba(255,255,255,0.6)', strokeWidth:1.5}),
+        E('rect', {x:mx-MAG_HW, y:SOL_CY-MAG_HH, width:MAG_HW*2, height:MAG_HH*2,
+          fill:'none', stroke:'rgba(255,255,255,0.2)', strokeWidth:1, rx:3}),
+        E('text', {x:mx-MAG_HW/2, y:SOL_CY+5, textAnchor:'middle', fontSize:14, fontWeight:500,
+          style:{fill:'white', fontFamily:'var(--font-sans)'}}, pole),
+        E('text', {x:mx+MAG_HW/2, y:SOL_CY+5, textAnchor:'middle', fontSize:14, fontWeight:500,
+          style:{fill:'white', fontFamily:'var(--font-sans)'}}, pole==='N' ? 'S' : 'N'),
+      ),
+
+      /* Front coils (bottom half) — drawn over magnet for depth illusion */
+      ...coilXs.map((cx,i) => E('ellipse',{key:'f'+i, cx, cy:SOL_CY, rx:8, ry:SOL_HH,
+        fill:'none', stroke:'var(--color-text-secondary)', strokeWidth:1.5, clipPath:'url(#fl-bot)'})),
+
+      /* End caps */
+      ...[-1,1].map(s => E('line',{key:'ec'+s,
+        x1:SOL_CX+s*SOL_HW, y1:SOL_CY-SOL_HH, x2:SOL_CX+s*SOL_HW, y2:SOL_CY+SOL_HH,
+        stroke:'var(--color-text-secondary)', strokeWidth:1.5})),
+
+      E('text', {x:SOL_CX, y:SOL_CY+SOL_HH+18, textAnchor:'middle', fontSize:10,
+        style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}},
+        '\u03A6 = ' + flux.toFixed(4))
+    ),
+
+    /* Bottom panels */
+    E('div', {className:'bottom-grid', style:{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12}},
+
+      /* Galvanometer */
+      E('div', {style:{border:'0.5px solid var(--color-border-light)', borderRadius:'12px',
+        padding:'10px 8px 8px', background:'var(--color-bg-card)'}},
+
+        E('p', {style:{margin:'0 0 2px', fontSize:11, color:'var(--color-text-secondary)', textAlign:'center'}}, 'galvanometer'),
+
+        predMode && !revealed && E('div', {style:{marginBottom:6, textAlign:'center'}},
+          E('p', {style:{fontSize:11, color:'#7c3aed', margin:'0 0 4px'}}, 'Move magnet, then predict deflection:'),
+          E('div', {style:{display:'flex', justifyContent:'center', gap:6}},
+            ...[['left','\u2190 left'], ['zero','\u25CF zero'], ['right','right \u2192']].map(([v,label]) =>
+              E('button', {key:v,
+                style:{padding:'3px 8px', fontSize:11, cursor:'pointer', borderRadius:'8px', fontFamily:'var(--font-sans)',
+                  border: prediction===v ? '1.5px solid #7c3aed' : '0.5px solid var(--color-border-mid)',
+                  background: prediction===v ? '#f5f3ff' : 'var(--color-bg-card)',
+                  color: prediction===v ? '#7c3aed' : 'var(--color-text-secondary)'},
+                onClick: () => { setPred(v); setRevealed(true); }
+              }, label)
+            )
+          )
+        ),
+
+        predMode && revealed && E('div', {style:{marginBottom:4, textAlign:'center'}},
+          E('p', {style:{fontSize:12, margin:'0 0 3px',
+            color: isCorrect ? '#16a34a' : '#dc2626', fontWeight:500}},
+            isCorrect ? '\u2713 Correct!' : '\u2717 Not quite \u2014 check the arrow'),
+          E('button', {
+            style:{padding:'2px 8px', fontSize:11, cursor:'pointer', borderRadius:'8px',
+              fontFamily:'var(--font-sans)', border:'0.5px solid var(--color-border-mid)',
+              background:'var(--color-bg-card)', color:'var(--color-text-secondary)'},
+            onClick: () => { setPred(null); setRevealed(false); doReset(pole); }
+          }, 'Try again')
+        ),
+
+        E('svg', {viewBox:'-82 -80 164 112', style:{width:'100%', height:'auto'}},
+          E('path', {d:'M -72 18 A 72 72 0 0 1 72 18', fill:'none', stroke:'var(--color-border-mid)', strokeWidth:2}),
+          ...[-72,-60,-45,-30,-15,0,15,30,45,60,72].map(deg => {
+            const rad = (deg-90) * Math.PI / 180;
+            const isMaj = deg % 30 === 0;
+            const r1 = isMaj ? 59 : 65, r2 = 72;
+            return E('g', {key:'t'+deg},
+              E('line', {x1:Math.cos(rad)*r1, y1:Math.sin(rad)*r1,
+                x2:Math.cos(rad)*r2, y2:Math.sin(rad)*r2,
+                stroke:'var(--color-border-mid)', strokeWidth: isMaj ? 1.5 : 0.75}),
+              deg===-60 && E('text', {x:Math.cos(rad)*50, y:Math.sin(rad)*50+4,
+                textAnchor:'middle', fontSize:9, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-sans)'}}, '\u2212'),
+              deg===60  && E('text', {x:Math.cos(rad)*50, y:Math.sin(rad)*50+4,
+                textAnchor:'middle', fontSize:9, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-sans)'}}, '+'),
+              deg===0   && E('text', {x:0, y:-46, textAnchor:'middle', fontSize:9,
+                style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-sans)'}}, '0')
+            );
+          }),
+          (!predMode || revealed) && E('g', {transform:`rotate(${galvAngle} 0 8)`},
+            E('polygon', {points:'-3,8 3,8 0,-66',
+              fill: isActive ? '#dc2626' : 'var(--color-text-secondary)', opacity:0.25}),
+            E('line', {x1:0, y1:8, x2:0, y2:-66,
+              stroke: isActive ? '#dc2626' : 'var(--color-text-secondary)',
+              strokeWidth:1.5, strokeLinecap:'round'})
+          ),
+          predMode && !revealed && E('line', {x1:0, y1:8, x2:0, y2:-66,
+            stroke:'var(--color-border-mid)', strokeWidth:1.5, strokeDasharray:'5 3', strokeLinecap:'round'}),
+          E('circle', {cx:0, cy:8, r:4, fill:'var(--color-bg-surface)', stroke:'var(--color-border-mid)', strokeWidth:1}),
+          E('text', {x:0, y:28, textAnchor:'middle', fontSize:9,
+            style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}},
+            '\u03B5 = ' + (emf*5).toFixed(2))
+        ),
+
+        E('p', {style:{margin:'2px 0 0', fontSize:10, lineHeight:1.5,
+          color: isActive ? '#7c3aed' : 'var(--color-text-tertiary)',
+          textAlign:'center', minHeight:34, padding:'0 4px'}}, statusText)
+      ),
+
+      /* Graphs */
+      E('div', {style:{border:'0.5px solid var(--color-border-light)', borderRadius:'12px',
+        padding:'10px 8px 8px', background:'var(--color-bg-card)'}},
+
+        E('p', {style:{margin:'0 0 4px', fontSize:11, color:'var(--color-text-secondary)'}},
+          'Magnetic flux \u03A6  (time \u2192)'),
+        E('svg', {viewBox:`0 0 ${GW} ${GH}`, style:{width:'100%', height:'auto', borderBottom:'0.5px solid var(--color-border-light)', marginBottom:8}},
+          E('line', {x1:0, y1:GH/2, x2:GW, y2:GH/2, stroke:'var(--color-border-light)', strokeWidth:0.5}),
+          fluxPath && E('path', {d:fluxPath, fill:'none', stroke:'#0ea5e9', strokeWidth:1.5, strokeLinejoin:'round'}),
+          E('text', {x:4, y:11, fontSize:8, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}}, '+\u03A6'),
+          E('text', {x:4, y:GH-2, fontSize:8, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}}, '\u2212\u03A6'),
+          E('text', {x:GW-3, y:GH/2-4, textAnchor:'end', fontSize:8, style:{fill:'#0ea5e9', fontFamily:'var(--font-mono)'}},
+            '\u03A6=' + flux.toFixed(3))
+        ),
+
+        E('p', {style:{margin:'0 0 4px', fontSize:11, color:'var(--color-text-secondary)'}},
+          'Induced EMF \u03B5 = \u2212\u0394\u03A6/\u0394t'),
+        E('svg', {viewBox:`0 0 ${GW} ${GH}`, style:{width:'100%', height:'auto'}},
+          E('line', {x1:0, y1:GH/2, x2:GW, y2:GH/2, stroke:'var(--color-border-light)', strokeWidth:0.5}),
+          emfPath && E('path', {d:emfPath, fill:'none', stroke:'#7c3aed', strokeWidth:1.5, strokeLinejoin:'round'}),
+          E('text', {x:4, y:11, fontSize:8, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}}, '+\u03B5'),
+          E('text', {x:4, y:GH-2, fontSize:8, style:{fill:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)'}}, '\u2212\u03B5'),
+          E('text', {x:GW-3, y:GH/2-4, textAnchor:'end', fontSize:8, style:{fill:'#7c3aed', fontFamily:'var(--font-mono)'}},
+            '\u03B5=' + (emf*5).toFixed(2))
+        ),
+
+        E('div', {style:{marginTop:8, display:'flex', alignItems:'center', gap:5}},
+          E('span', {style:{fontSize:9, color:'var(--color-text-tertiary)'}}, 'S\u2190'),
+          E('div', {style:{flex:1, height:5, background:'var(--color-bg-surface)', borderRadius:3, position:'relative', overflow:'hidden'}},
+            E('div', {style:{position:'absolute', left:'50%', top:0, bottom:0, width:'0.5px', background:'var(--color-border-mid)'}}),
+            E('div', {style:{
+              position:'absolute', height:'100%',
+              width: Math.abs(flux)*100 + '%',
+              left:  flux >= 0 ? '50%' : undefined,
+              right: flux <  0 ? '50%' : undefined,
+              background: flux >= 0 ? '#0ea5e9' : '#f97316',
+              transition:'width 0.08s, background 0.2s',
+            }})
+          ),
+          E('span', {style:{fontSize:9, color:'var(--color-text-tertiary)'}}, 'N\u2192'),
+          E('span', {style:{fontSize:9, fontFamily:'var(--font-mono)', color:'var(--color-text-secondary)', minWidth:44}},
+            (flux >= 0 ? '+' : '') + flux.toFixed(3))
+        )
+      )
+    ),
+
+    /* Equation footer */
+    E('div', {style:{marginTop:10, padding:'8px 12px', background:'var(--color-bg-surface)',
+      borderRadius:'8px', border:'0.5px solid var(--color-border-light)'}},
+      E('p', {style:{margin:0, fontSize:12, color:'var(--color-text-secondary)'}},
+        '\u03B5 = \u2212N \u0394\u03A6/\u0394t\u2002(Faraday)\u2003|\u2003Induced B opposes \u0394\u03A6\u2002(Lenz)\u2003|\u2003\u03A6 = BA cos\u03B8'))
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(FaradayLab));
+</script>
+</body>
+</html>
